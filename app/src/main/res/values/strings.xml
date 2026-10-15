@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">VISOR Dashcam</string>
+    <string name="channel_recording_name">行車記錄器背景錄影</string>
+    <string name="channel_recording_desc">維持後台循環錄影與 AI 監測狀態</string>
+    <string name="channel_alert_name">ADAS 行車碰撞預警</string>
+    <string name="channel_alert_desc">前車碰撞、起步提醒與緊急煞車告警</string>
+</resources>
