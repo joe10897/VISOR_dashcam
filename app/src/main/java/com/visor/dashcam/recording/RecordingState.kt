@@ -6,5 +6,6 @@ data class RecordingState(
     val lockReason: String? = null,
     val currentSegmentDurationSeconds: Int = 0,
     val totalRecordedSegments: Int = 0,
-    val availableStorageGb: Float = 0f
+    val availableStorageGb: Float = 0f,
+    val cameraErrorMessage: String? = null
 )

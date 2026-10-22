@@ -26,7 +26,7 @@ android {
         }
 
         ndk {
-            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a"))
+            abiFilters.addAll(listOf("arm64-v8a", "armeabi-v7a", "x86_64"))
         }
     }
 
@@ -60,6 +60,11 @@ android {
     }
 
     packaging {
+        // Required for Android 15+ 16 KB page size compatibility:
+        // Stores native .so libraries uncompressed and aligned at 16 KB zip boundaries
+        jniLibs {
+            useLegacyPackaging = false
+        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
@@ -92,13 +97,10 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraxVersion")
     implementation("androidx.camera:camera-video:$cameraxVersion")
     implementation("androidx.camera:camera-view:$cameraxVersion")
+    implementation("androidx.camera:camera-effects:$cameraxVersion")
 
-    // On-Device AI Inference: ONNX Runtime Mobile (Hardware NNAPI / CPU SIMD)
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.19.2")
-
-    // LiteRT / TFLite (Optional fallback for INT8 TFLite models)
-    implementation("org.tensorflow:tensorflow-lite:2.16.1")
-    implementation("org.tensorflow:tensorflow-lite-support:0.4.4")
+    // On-Device AI Inference: ONNX Runtime Mobile (1.23.2+ supports Android 15+ 16 KB page sizes with 0x4000 ELF alignment)
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.23.2")
 
     // Local Room Database (100% Offline Storage of Clips & Event Telemetry)
     val roomVersion = "2.6.1"

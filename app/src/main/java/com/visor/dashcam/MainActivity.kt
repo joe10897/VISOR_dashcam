@@ -11,8 +11,10 @@ import android.os.Bundle
 import android.os.IBinder
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -22,24 +24,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import com.visor.dashcam.ai.adas.ADASAlert
+import com.visor.dashcam.ai.model.DetectionResult
 import com.visor.dashcam.recording.DashcamRecordingService
 import com.visor.dashcam.recording.RecordingState
 import com.visor.dashcam.sensors.TelemetryData
+import com.visor.dashcam.sensors.ThermalState
 import com.visor.dashcam.ui.components.VisorHUD
 import com.visor.dashcam.ui.screens.ClipLibraryScreen
+import com.visor.dashcam.ui.screens.SettingsScreen
 import com.visor.dashcam.ui.theme.PureBlack
 import com.visor.dashcam.ui.theme.TextWhite
 import com.visor.dashcam.ui.theme.VisorTheme
+import kotlinx.coroutines.flow.MutableStateFlow
 
 class MainActivity : ComponentActivity() {
 
-    private var recordingService: DashcamRecordingService? = null
-    private var isBound by mutableStateOf(false)
+    private var recordingService by mutableStateOf<DashcamRecordingService?>(null)
+    private var isBound = false
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            val localBinder = binder as DashcamRecordingService.LocalBinder
-            recordingService = localBinder.getService()
+            val localBinder = binder as? DashcamRecordingService.LocalBinder
+            recordingService = localBinder?.getService()
             isBound = true
         }
 
@@ -51,8 +61,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
 
-        // Keep screen on while dashcam is running
+        // Configure Immersive Sticky Fullscreen mode for permanent landscape dashcam mount
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val insetsController = WindowCompat.getInsetsController(window, window.decorView)
+        insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+
+        // Keep screen on while dashcam is in foreground
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         setContent {
@@ -64,81 +81,122 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun MainScreen() {
-        var hasPermissions by remember { mutableStateOf(checkAllPermissions()) }
-        var currentScreen by remember { mutableStateOf("HUD") } // "HUD" or "LIBRARY"
+        val app = application as VisorApp
+        val settingsRepository = app.settingsRepository
+        val settings by settingsRepository.settings.collectAsState()
+
+        var hasCameraPermission by remember { mutableStateOf(hasCameraPermissionGranted()) }
+        var currentScreen by remember { mutableStateOf("HUD") } // "HUD", "LIBRARY", "SETTINGS"
+
+        BackHandler(enabled = currentScreen != "HUD") {
+            currentScreen = "HUD"
+        }
 
         val permissionLauncher = rememberLauncherForActivityResult(
             contract = ActivityResultContracts.RequestMultiplePermissions()
-        ) { results ->
-            hasPermissions = results.values.all { it }
-            if (hasPermissions) {
+        ) {
+            hasCameraPermission = hasCameraPermissionGranted()
+            if (hasCameraPermission) {
                 startAndBindRecordingService()
             }
         }
 
-        LaunchedEffect(Unit) {
-            if (!hasPermissions) {
-                val perms = mutableListOf(
-                    Manifest.permission.CAMERA,
-                    Manifest.permission.RECORD_AUDIO,
-                    Manifest.permission.ACCESS_FINE_LOCATION
-                )
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    perms.add(Manifest.permission.POST_NOTIFICATIONS)
-                }
-                permissionLauncher.launch(perms.toTypedArray())
+        LaunchedEffect(hasCameraPermission) {
+            if (!hasCameraPermission) {
+                permissionLauncher.launch(getPermissionsToRequest())
             } else {
                 startAndBindRecordingService()
             }
         }
 
-        if (!hasPermissions) {
+        if (!hasCameraPermission) {
             PermissionRequestScreen(
                 onRequestPermissions = {
-                    val perms = mutableListOf(
-                        Manifest.permission.CAMERA,
-                        Manifest.permission.RECORD_AUDIO,
-                        Manifest.permission.ACCESS_FINE_LOCATION
-                    )
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        perms.add(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    permissionLauncher.launch(perms.toTypedArray())
+                    permissionLauncher.launch(getPermissionsToRequest())
                 }
             )
         } else {
             val service = recordingService
-            val telemetry by service?.telemetryManager?.telemetry?.collectAsState()
-                ?: remember { mutableStateOf(TelemetryData()) }
-            val recordingState by service?.recordingState?.collectAsState()
-                ?: remember { mutableStateOf(RecordingState()) }
-            val detections by service?.latestDetections?.collectAsState()
-                ?: remember { mutableStateOf(emptyList()) }
-            val currentAlert by service?.adasManager?.currentAlert?.collectAsState()
-                ?: remember { mutableStateOf(null) }
 
-            if (currentScreen == "HUD") {
-                VisorHUD(
-                    telemetry = telemetry,
-                    recordingState = recordingState,
-                    detections = detections,
-                    currentAlert = currentAlert,
-                    onLockClicked = {
-                        service?.lockCurrentRecording("MANUAL_TOUCH_LOCK")
-                    },
-                    onStopClicked = {
-                        stopRecordingService()
-                    },
-                    onLibraryClicked = {
-                        currentScreen = "LIBRARY"
-                    }
-                )
-            } else {
-                ClipLibraryScreen(
-                    onBackClicked = {
-                        currentScreen = "HUD"
-                    }
-                )
+            // Unconditional StateFlow collection to keep Compose slot table 100% stable
+            val telemetryFlow = remember(service) {
+                service?.telemetryManager?.telemetry ?: MutableStateFlow(TelemetryData())
+            }
+            val recordingStateFlow = remember(service) {
+                service?.recordingState ?: MutableStateFlow(RecordingState())
+            }
+            val detectionsFlow = remember(service) {
+                service?.latestDetections ?: MutableStateFlow(emptyList<DetectionResult>())
+            }
+            val alertFlow = remember(service) {
+                service?.adasManager?.currentAlert ?: MutableStateFlow<ADASAlert?>(null)
+            }
+            val thermalFlow = remember(service) {
+                service?.thermalManager?.thermalState ?: MutableStateFlow(ThermalState())
+            }
+
+            val telemetry by telemetryFlow.collectAsState()
+            val recordingState by recordingStateFlow.collectAsState()
+            val detections by detectionsFlow.collectAsState()
+            val currentAlert by alertFlow.collectAsState()
+            val thermalState by thermalFlow.collectAsState()
+
+            when (currentScreen) {
+                "HUD" -> {
+                    VisorHUD(
+                        telemetry = telemetry,
+                        recordingState = recordingState,
+                        settings = settings,
+                        thermalState = thermalState,
+                        detections = detections,
+                        currentAlert = currentAlert,
+                        onAttachPreviewSurface = { surfaceProvider ->
+                            service?.attachPreviewSurface(surfaceProvider)
+                        },
+                        onLockClicked = {
+                            service?.lockCurrentRecording("MANUAL_TOUCH_LOCK")
+                        },
+                        onStopClicked = {
+                            try {
+                                service?.stopDashcam()
+                            } catch (_: Exception) {}
+                            stopRecordingService()
+                            finishAffinity()
+                        },
+                        onLibraryClicked = {
+                            currentScreen = "LIBRARY"
+                        },
+                        onSettingsClicked = {
+                            currentScreen = "SETTINGS"
+                        }
+                    )
+                }
+
+                "LIBRARY" -> {
+                    ClipLibraryScreen(
+                        onBackClicked = {
+                            currentScreen = "HUD"
+                        }
+                    )
+                }
+
+                "SETTINGS" -> {
+                    SettingsScreen(
+                        settingsRepository = settingsRepository,
+                        onClearUnlockedClips = {
+                            service?.storageManager?.clearAllUnlockedClips() ?: 0
+                        },
+                        onEnforceQuotaNow = {
+                            service?.storageManager?.checkAndPurgeOldestClips()
+                        },
+                        onVideoQualityChanged = {
+                            service?.restartCameraWithNewSettings()
+                        },
+                        onBackClicked = {
+                            currentScreen = "HUD"
+                        }
+                    )
+                }
             }
         }
     }
@@ -160,7 +218,7 @@ class MainActivity : ComponentActivity() {
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    text = "為實現完全離線循環錄影與前車防撞預警，需要授予相機、麥克風與 GPS 權限。\n本 App 100% 離線運行，絕不上傳任何數據。",
+                    text = "為實現完全離線循環錄影與前車防撞預警，需要授予相機權限（以及選配的麥克風與 GPS 權限）。\n本 App 100% 離線運行，絕不上傳任何數據。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium
                 )
@@ -172,40 +230,61 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun checkAllPermissions(): Boolean {
-        val required = mutableListOf(
+    private fun hasCameraPermissionGranted(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.CAMERA
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun getPermissionsToRequest(): Array<String> {
+        val perms = mutableListOf(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.ACCESS_FINE_LOCATION
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            required.add(Manifest.permission.POST_NOTIFICATIONS)
+            perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
-        return required.all {
-            ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
+        return perms.toTypedArray()
     }
 
     private fun startAndBindRecordingService() {
-        val intent = Intent(this, DashcamRecordingService::class.java).apply {
-            action = DashcamRecordingService.ACTION_START
+        try {
+            val intent = Intent(this, DashcamRecordingService::class.java).apply {
+                action = DashcamRecordingService.ACTION_START
+            }
+            ContextCompat.startForegroundService(this, intent)
+            bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        ContextCompat.startForegroundService(this, intent)
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
     }
 
     private fun stopRecordingService() {
-        val intent = Intent(this, DashcamRecordingService::class.java).apply {
-            action = DashcamRecordingService.ACTION_STOP
+        try {
+            if (isBound) {
+                unbindService(serviceConnection)
+                isBound = false
+            }
+            val intent = Intent(this, DashcamRecordingService::class.java).apply {
+                action = DashcamRecordingService.ACTION_STOP
+            }
+            startService(intent)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
-        startService(intent)
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         if (isBound) {
-            unbindService(serviceConnection)
+            try {
+                unbindService(serviceConnection)
+            } catch (_: Exception) {
+            }
             isBound = false
         }
+        super.onDestroy()
     }
 }

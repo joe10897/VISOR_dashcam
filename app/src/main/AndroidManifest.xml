@@ -14,6 +14,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
@@ -23,13 +24,13 @@
     <!-- Features Requirement -->
     <uses-feature
         android:name="android.hardware.camera"
-        android:required="true" />
+        android:required="false" />
     <uses-feature
         android:name="android.hardware.location.gps"
         android:required="false" />
     <uses-feature
         android:name="android.hardware.sensor.accelerometer"
-        android:required="true" />
+        android:required="false" />
 
     <application
         android:name=".VisorApp"
@@ -44,6 +45,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="sensorLandscape"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:theme="@style/Theme.VISORDashcam">
             <intent-filter>
@@ -56,7 +58,7 @@
         <service
             android:name=".recording.DashcamRecordingService"
             android:exported="false"
-            android:foregroundServiceType="camera|location" />
+            android:foregroundServiceType="camera|location|microphone" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

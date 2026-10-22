@@ -19,8 +19,23 @@ interface ClipDao {
     @Query("SELECT * FROM clips WHERE isLocked = 0 ORDER BY startTimeMillis ASC LIMIT :limit")
     suspend fun getOldestUnlockedClips(limit: Int): List<ClipEntity>
 
+    @Query("SELECT * FROM clips WHERE isLocked = 0")
+    suspend fun getAllUnlockedClips(): List<ClipEntity>
+
     @Query("SELECT SUM(fileSizeBytes) FROM clips")
     suspend fun getTotalStorageUsedBytes(): Long?
+
+    @Query("SELECT SUM(fileSizeBytes) FROM clips")
+    fun getTotalStorageUsedBytesFlow(): Flow<Long?>
+
+    @Query("SELECT SUM(fileSizeBytes) FROM clips WHERE isLocked = 1")
+    fun getLockedStorageUsedBytesFlow(): Flow<Long?>
+
+    @Query("SELECT COUNT(*) FROM clips")
+    fun getTotalClipCountFlow(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM clips WHERE isLocked = 1")
+    fun getLockedClipCountFlow(): Flow<Int>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(clip: ClipEntity): Long

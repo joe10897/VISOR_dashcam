@@ -10,6 +10,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.Bundle
+import com.visor.dashcam.data.repository.SettingsRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,14 +18,18 @@ import kotlin.math.sqrt
 
 class TelemetryManager(
     private val context: Context,
+    private val settingsRepository: SettingsRepository,
     private val onEmergencyImpact: ((gForce: Float) -> Unit)? = null
 ) : SensorEventListener, LocationListener {
 
-    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
-    private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+    private val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
 
     private val _telemetry = MutableStateFlow(TelemetryData())
     val telemetry: StateFlow<TelemetryData> = _telemetry.asStateFlow()
+
+    var lastKnownLocation: Location? = null
+        private set
 
     private var accelerometer: Sensor? = null
     private var magnetometer: Sensor? = null
@@ -34,39 +39,44 @@ class TelemetryManager(
     private var hasGravity = false
     private var hasGeomagnetic = false
 
-    // Impact detection parameters (standard gravity = 9.80665 m/s^2)
-    private val impactThresholdG = 2.8f // > 2.8g spike indicates severe collision/pothole
-    private val hardBrakeThresholdG = 0.55f // Forward deceleration > 0.55g
+    private val hardBrakeThresholdG = 0.55f
     private var lastImpactTimestamp = 0L
 
     fun start() {
-        // 1. Register Sensors
-        accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
-        magnetometer = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        try {
+            accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+            magnetometer = sensorManager?.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
 
-        accelerometer?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
-        }
-        magnetometer?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+            accelerometer?.let {
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+            }
+            magnetometer?.let {
+                sensorManager?.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
-        // 2. Register Offline GPS
         startLocationUpdates()
     }
 
     @SuppressLint("MissingPermission")
     private fun startLocationUpdates() {
+        val locMgr = locationManager ?: return
         try {
-            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-                locationManager.requestLocationUpdates(
+            val providers = locMgr.allProviders
+            if (providers.contains(LocationManager.GPS_PROVIDER) &&
+                locMgr.isProviderEnabled(LocationManager.GPS_PROVIDER)
+            ) {
+                locMgr.requestLocationUpdates(
                     LocationManager.GPS_PROVIDER,
-                    500L, // 2Hz updates
+                    500L,
                     0.5f,
                     this
                 )
             }
-        } catch (e: SecurityException) {
+        } catch (e: Exception) {
+            // Safely catch SecurityException or IllegalArgumentException on devices without GPS
             e.printStackTrace()
         }
     }
@@ -76,31 +86,28 @@ class TelemetryManager(
 
         if (event.sensor.type == Sensor.TYPE_ACCELEROMETER) {
             val alpha = 0.8f
-            // Low-pass filter to isolate gravity
             gravity[0] = alpha * gravity[0] + (1 - alpha) * event.values[0]
             gravity[1] = alpha * gravity[1] + (1 - alpha) * event.values[1]
             gravity[2] = alpha * gravity[2] + (1 - alpha) * event.values[2]
             hasGravity = true
 
-            // Linear acceleration (dynamic G-force without static 1g gravity)
             val linearX = (event.values[0] - gravity[0]) / SensorManager.GRAVITY_EARTH
             val linearY = (event.values[1] - gravity[1]) / SensorManager.GRAVITY_EARTH
             val linearZ = (event.values[2] - gravity[2]) / SensorManager.GRAVITY_EARTH
 
-            // Total dynamic G-force vector
             val totalG = sqrt(linearX * linearX + linearY * linearY + linearZ * linearZ)
 
             var isImpact = false
             var isHardBrake = false
 
-            // Sudden collision impact check
+            val impactThresholdG = settingsRepository.settings.value.impactSensitivity.thresholdG
+
             if (totalG > impactThresholdG && (now - lastImpactTimestamp > 5000L)) {
                 lastImpactTimestamp = now
                 isImpact = true
                 onEmergencyImpact?.invoke(totalG)
             }
 
-            // Longitudinal hard braking check
             if (linearY < -hardBrakeThresholdG || linearZ < -hardBrakeThresholdG) {
                 isHardBrake = true
             }
@@ -120,14 +127,12 @@ class TelemetryManager(
             hasGeomagnetic = true
         }
 
-        // Calculate Compass Heading
         if (hasGravity && hasGeomagnetic) {
             val r = FloatArray(9)
             val i = FloatArray(9)
             if (SensorManager.getRotationMatrix(r, i, gravity, geomagnetic)) {
                 val orientation = FloatArray(3)
                 SensorManager.getOrientation(r, orientation)
-                // Azimuth in degrees [0, 360]
                 var azimuth = Math.toDegrees(orientation[0].toDouble()).toFloat()
                 if (azimuth < 0) azimuth += 360f
 
@@ -139,6 +144,7 @@ class TelemetryManager(
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 
     override fun onLocationChanged(location: Location) {
+        lastKnownLocation = location
         val speedKmh = if (location.hasSpeed()) location.speed * 3.6f else 0f
         val heading = if (location.hasBearing()) location.bearing else _telemetry.value.headingDegrees
 
@@ -157,11 +163,13 @@ class TelemetryManager(
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
 
     fun stop() {
-        sensorManager.unregisterListener(this)
         try {
-            locationManager.removeUpdates(this)
-        } catch (e: Exception) {
-            e.printStackTrace()
+            sensorManager?.unregisterListener(this)
+        } catch (_: Exception) {
+        }
+        try {
+            locationManager?.removeUpdates(this)
+        } catch (_: Exception) {
         }
     }
 }
