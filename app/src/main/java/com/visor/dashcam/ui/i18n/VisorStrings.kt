@@ -92,7 +92,17 @@ data class VisorI18nStrings(
     val noClipsFound: String,
     val filterAll: String,
     val filterLocked: String,
-    val filterNormal: String
+    val filterNormal: String,
+
+    // Blackbox Forensics
+    val blackboxAnalysisButton: String,
+    val blackboxReportTitle: String,
+    val blackboxEgoSpeed: String,
+    val blackboxTargetSpeed: String,
+    val blackboxRelativeSpeed: String,
+    val blackboxImpactG: String,
+    val blackboxTimelineTitle: String,
+    val blackboxScenarioTitle: String
 )
 
 object VisorStrings {
@@ -173,7 +183,16 @@ object VisorStrings {
         noClipsFound = "尚無錄製影片",
         filterAll = "全部",
         filterLocked = "已鎖定",
-        filterNormal = "一般"
+        filterNormal = "一般",
+
+        blackboxAnalysisButton = "事故黑盒子分析",
+        blackboxReportTitle = "🛡️ 事故鑑識黑盒子報告",
+        blackboxEgoSpeed = "自車初速",
+        blackboxTargetSpeed = "目標車速",
+        blackboxRelativeSpeed = "相對速差 (Delta-V)",
+        blackboxImpactG = "衝擊 G 值",
+        blackboxTimelineTitle = "碰撞前 3 秒時序軌跡",
+        blackboxScenarioTitle = "事故研判情境"
     )
 
     private val en = VisorI18nStrings(
@@ -253,7 +272,16 @@ object VisorStrings {
         noClipsFound = "No clips recorded yet",
         filterAll = "All",
         filterLocked = "Protected",
-        filterNormal = "Normal"
+        filterNormal = "Normal",
+
+        blackboxAnalysisButton = "Blackbox Forensics",
+        blackboxReportTitle = "🛡️ Forensic Blackbox Report",
+        blackboxEgoSpeed = "Ego Speed",
+        blackboxTargetSpeed = "Target Speed",
+        blackboxRelativeSpeed = "Delta-V (Rel Speed)",
+        blackboxImpactG = "Impact G-Force",
+        blackboxTimelineTitle = "Pre-Crash 3s Trajectory",
+        blackboxScenarioTitle = "Scenario Assessment"
     )
 
     fun get(language: AppLanguage): VisorI18nStrings = when (language) {

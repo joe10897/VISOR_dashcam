@@ -19,7 +19,8 @@ import kotlin.math.sqrt
 class TelemetryManager(
     private val context: Context,
     private val settingsRepository: SettingsRepository,
-    private val onEmergencyImpact: ((gForce: Float) -> Unit)? = null
+    private val onEmergencyImpact: ((gForce: Float) -> Unit)? = null,
+    private val onHardBrake: ((gForceY: Float) -> Unit)? = null
 ) : SensorEventListener, LocationListener {
 
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
@@ -41,6 +42,7 @@ class TelemetryManager(
 
     private val hardBrakeThresholdG = 0.55f
     private var lastImpactTimestamp = 0L
+    private var lastHardBrakeTimestamp = 0L
 
     fun start() {
         try {
@@ -110,6 +112,10 @@ class TelemetryManager(
 
             if (linearY < -hardBrakeThresholdG || linearZ < -hardBrakeThresholdG) {
                 isHardBrake = true
+                if (now - lastHardBrakeTimestamp > 5000L) {
+                    lastHardBrakeTimestamp = now
+                    onHardBrake?.invoke(linearY)
+                }
             }
 
             _telemetry.value = _telemetry.value.copy(

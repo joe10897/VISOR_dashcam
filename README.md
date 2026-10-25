@@ -205,6 +205,40 @@ flowchart TD
 - 於設定頁面提供「預警距離微調」選項：`0.8x (偏近/較晚提醒)`、`0.9x`、`1.0x (標準推薦)`、`1.1x`、`1.2x (偏遠/提早提醒)`。
 - 採用純量浮點數一階運算校正幾何距離，單次檢測耗時僅約 0.1 奈秒 ($O(1)$)，對神經網路推論幀率與 CPU 負載帶來 **0% 額外效能損耗**。
 
+### 8. 事故黑盒子車速回溯推估與鑑識演算法 (Crash Forensic Blackbox & Speed Estimation)
+專為車禍歸責、保險理賠與車輛行車事故鑑定委員會設計之**全離線事件黑盒子**。日常行車時 HUD **完全不顯示**對方時速，維持極簡專注的駕駛視野；僅在**前車異常急煞、自車緊急煞停、碰撞警報或 G-Sensor 衝擊鎖檔**時，自動解鎖並持久化「碰撞前 3.5 秒時序軌跡黑盒子」。
+
+#### (1) 單目幾何與相對速度微分 (Noise-Resistant Velocity OLS)
+- 目標物體縱向距離 $D(t)$ 由 YOLO 檢測框寬度與單目透視幾何換算：
+  $$D(t) \approx w_{\text{width}} \cdot \frac{f_x \cdot W_{\text{real}}}{w_{\text{bbox}}} + w_{\text{height}} \cdot \frac{h_{\text{mount}}}{\tan(\theta_{\text{pitch}} + \alpha_y)}$$
+  *(其中 $W_{\text{real}}$ 依據車輛類別先驗分級：轎車 1.8m、休旅/貨卡 2.2m、大客車 2.8m、機車 0.8m)*
+- 為消除相鄰影格間神經網路邊界框的像素抖動（Bounding Box Jitter），採用**滑動窗口最小平方法 (Ordinary Least Squares, OLS)** 擬合距離變化率（斜率）：
+  $$V_{\text{rel}} = \frac{dD}{dt} = \frac{N \sum (t_i D_i) - \sum t_i \sum D_i}{N \sum t_i^2 - (\sum t_i)^2} \times 3.6 \quad (\text{km/h})$$
+
+#### (2) 雙向情境向量判定模型 (Bidirectional Vector Classification)
+結合自車由 GPS + G-Sensor 慣性導航融合之高精確時速 $V_{\text{ego}}$，推算目標車絕對時速 $V_{\text{target}}$：
+- **情境 A：同向行駛之前車 (Preceding Vehicle / Rear-End & Brake Check)**
+  - 判定準則：$V_{\text{rel}} \ge 0$ 或 $|V_{\text{rel}}| \le V_{\text{ego}} + 5.0\text{ km/h}$
+  - 前車時速公式：
+    $$V_{\text{target}} = \max\left(0,\, V_{\text{ego}} + V_{\text{rel}}\right) = \max\left(0,\, V_{\text{ego}} - |V_{\text{rel}}|\right)$$
+  - **前車惡意急煞 (Brake Check) 判定**：
+    追蹤目標車於時間窗口內之二階加速度：
+    $$a_{\text{target}} = \frac{\Delta V_{\text{target}}}{\Delta t}$$
+    若 $a_{\text{target}} < -3.8\text{ m/s}^2$（約 $-0.39\text{G}$ 急減速）且自車時速 $> 20\text{ km/h}$，系統立即判定為「同向前車突發急煞」，並自動鎖檔存證。
+- **情境 B：路口對向超速來車 (Oncoming High-Speed Vehicle / Head-On & Turning)**
+  - 判定準則：$V_{\text{rel}} < 0$ 且接近速率 $|V_{\text{rel}}| > V_{\text{ego}} + 5.0\text{ km/h}$（物理上接近速率超越自車時速，目標必逆向迎面而來）。
+  - 來車時速公式：
+    $$V_{\text{target}} = |V_{\text{rel}}| - V_{\text{ego}}$$
+    *(若自車停等紅燈 $V_{\text{ego}} = 0\text{ km/h}$，來車時速即等於逼近速率 $|V_{\text{rel}}|$)*
+
+#### (3) 碰撞前 3.5 秒環狀緩衝與 JSON 獨立黑盒子
+- 記憶體中維持約 60 筆（~6 秒，10Hz）非同步環狀緩衝區（Circular Ring Buffer）。
+- 觸發事件時，系統自動擷取事故前 $T-3.5\text{s}$ 至 $T+0.5\text{s}$ 的連續遙測時序：
+  - 取樣時間差（$T-3.0\text{s}, T-2.5\text{s}, \dots, T-0.0\text{s}$ 撞擊點）
+  - 自車即時時速與三軸 G 值
+  - 對方車輛估算時速、相對速差（$\Delta V$）與縱向距離
+- 資料自動序列化為同名 JSON 伴隨檔案（如 `VISOR_20261026_031500_123_blackbox.json`），免受 SD 卡抽拔或資料庫遷移影響，鑑定人員可直接在 PC 開啟或在 APP 內一鍵調閱。
+
 ---
 
 ## 📱 硬體推薦與車載安裝指引

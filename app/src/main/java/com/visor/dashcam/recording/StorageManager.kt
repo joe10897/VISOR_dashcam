@@ -120,7 +120,8 @@ class StorageManager(
         endLat: Double?,
         endLng: Double?,
         isLocked: Boolean = false,
-        lockReason: String? = null
+        lockReason: String? = null,
+        hasImpactEvent: Boolean = false
     ): Long = withContext(Dispatchers.IO) {
         val duration = ((endTime - startTime) / 1000).toInt().coerceAtLeast(1)
         val entity = ClipEntity(
@@ -137,7 +138,8 @@ class StorageManager(
             startLat = startLat,
             startLng = startLng,
             endLat = endLat,
-            endLng = endLng
+            endLng = endLng,
+            hasImpactEvent = hasImpactEvent
         )
         clipDao.insert(entity)
     }

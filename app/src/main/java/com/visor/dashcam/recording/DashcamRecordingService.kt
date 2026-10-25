@@ -89,6 +89,9 @@ class DashcamRecordingService : LifecycleService() {
     lateinit var thermalManager: ThermalManager
         private set
 
+    val vehicleSpeedTracker = com.visor.dashcam.ai.adas.VehicleSpeedTracker()
+    val blackboxRecorder = BlackboxRecorder()
+
     private var cameraProvider: ProcessCameraProvider? = null
     private var previewUseCase: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -144,9 +147,16 @@ class DashcamRecordingService : LifecycleService() {
         thermalManager = ThermalManager(this)
         thermalManager.start(settingsRepository.settings.value.aiTargetFps)
 
-        telemetryManager = TelemetryManager(this, settingsRepository) { gForce ->
-            lockCurrentRecording("G_SENSOR_IMPACT (${String.format(Locale.US, "%.2f", gForce)}G)")
-        }
+        telemetryManager = TelemetryManager(
+            context = this,
+            settingsRepository = settingsRepository,
+            onEmergencyImpact = { gForce ->
+                lockCurrentRecording("G_SENSOR_IMPACT (${String.format(Locale.US, "%.2f", gForce)}G)", impactG = gForce)
+            },
+            onHardBrake = { gForceY ->
+                lockCurrentRecording("HARD_BRAKE (${String.format(Locale.US, "%.2f", kotlin.math.abs(gForceY))}G)")
+            }
+        )
 
         acquireWakeLock()
         telemetryManager.start()
@@ -637,6 +647,34 @@ class DashcamRecordingService : LifecycleService() {
             val speed = telemetryManager.telemetry.value.speedKmh
             val analyzedDetections = adasManager.processFrame(detections, speed, currentSettings)
 
+            // Silent Multi-Object Speed & Trajectory Tracking (Forensics / Blackbox)
+            val trackerResult = vehicleSpeedTracker.update(analyzedDetections, speed, now)
+            val primaryTarget = trackerResult.primaryTarget
+            val primaryEstimate = primaryTarget?.currentSpeedEstimate
+
+            val currentTelemetry = telemetryManager.telemetry.value
+            blackboxRecorder.recordSample(
+                BlackboxSample(
+                    timestampMs = now,
+                    egoSpeedKmh = speed,
+                    gForceTotal = currentTelemetry.gForceTotal,
+                    gForceX = currentTelemetry.gForceX,
+                    gForceY = currentTelemetry.gForceY,
+                    gForceZ = currentTelemetry.gForceZ,
+                    targetDistanceM = primaryTarget?.lastEstimatedDistance,
+                    targetSpeedKmh = primaryEstimate?.targetSpeedKmh,
+                    targetRelSpeedKmh = primaryEstimate?.relativeSpeedKmh,
+                    targetDirection = primaryEstimate?.direction?.name,
+                    isTargetHardBraking = primaryEstimate?.isBrakeCheckAlert == true
+                )
+            )
+
+            // Auto-lock on sudden extreme emergency braking of preceding car
+            if (primaryEstimate?.isBrakeCheckAlert == true) {
+                val targetSpd = primaryEstimate.targetSpeedKmh.toInt()
+                lockCurrentRecording("TARGET_BRAKE_CHECK (前車急煞至 ${targetSpd} km/h)")
+            }
+
             _latestDetections.value = analyzedDetections
 
             if (adasManager.currentAlert.value?.type == ADASAlertType.FCW_CRITICAL) {
@@ -728,6 +766,19 @@ class DashcamRecordingService : LifecycleService() {
         val lockReason = _recordingState.value.lockReason
         val telemetry = telemetryManager.telemetry.value
         val maxSpeed = maxOf(segmentMaxSpeedKmh, telemetry.speedKmh)
+        val hasImpact = lockReason?.contains("IMPACT") == true
+
+        // Ensure blackbox companion JSON exists if locked
+        if (isLocked && lockReason != null) {
+            val jsonFile = File(file.parentFile, "${file.nameWithoutExtension}_blackbox.json")
+            if (!jsonFile.exists()) {
+                blackboxRecorder.captureEventSnapshot(
+                    videoFile = file,
+                    eventType = if (hasImpact) "IMPACT" else "LOCK",
+                    reason = lockReason
+                )
+            }
+        }
 
         // Non-cancellable serviceScope ensures Room DB insert finishes even if service is stopping
         serviceScope.launch {
@@ -744,7 +795,8 @@ class DashcamRecordingService : LifecycleService() {
                         endLat = telemetry.latitude,
                         endLng = telemetry.longitude,
                         isLocked = isLocked,
-                        lockReason = lockReason
+                        lockReason = lockReason,
+                        hasImpactEvent = hasImpact
                     )
                 } else if (file.exists()) {
                     file.delete()
@@ -820,11 +872,30 @@ class DashcamRecordingService : LifecycleService() {
         }
     }
 
-    fun lockCurrentRecording(reason: String) {
+    fun lockCurrentRecording(reason: String, impactG: Float = 0f) {
         _recordingState.value = _recordingState.value.copy(
             isCurrentClipLocked = true,
             lockReason = reason
         )
+        // Capture pre-crash 3.5s blackbox report and persist JSON sidecar
+        val targetFile = currentRecordingFile
+        serviceScope.launch {
+            try {
+                blackboxRecorder.captureEventSnapshot(
+                    videoFile = targetFile,
+                    eventType = when {
+                        reason.contains("IMPACT") -> "IMPACT"
+                        reason.contains("BRAKE") -> "HARD_BRAKE"
+                        reason.contains("FCW") -> "FCW"
+                        else -> "MANUAL_LOCK"
+                    },
+                    reason = reason,
+                    impactG = impactG
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
     }
 
     /**
@@ -864,6 +935,9 @@ class DashcamRecordingService : LifecycleService() {
 
     private fun doCleanupAndStop() {
         activeRecording = null
+        try {
+            vehicleSpeedTracker.clear()
+        } catch (_: Exception) {}
         try {
             overlayEffect?.close()
         } catch (_: Exception) {}

@@ -2,12 +2,15 @@ package com.visor.dashcam.ui.screens
 
 import android.content.Context
 import android.content.Intent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -23,6 +26,8 @@ import androidx.core.content.FileProvider
 import com.visor.dashcam.VisorApp
 import com.visor.dashcam.data.entity.ClipEntity
 import com.visor.dashcam.data.repository.AppLanguage
+import com.visor.dashcam.recording.BlackboxRecorder
+import com.visor.dashcam.recording.BlackboxReport
 import com.visor.dashcam.ui.i18n.VisorI18nStrings
 import com.visor.dashcam.ui.i18n.VisorStrings
 import com.visor.dashcam.ui.theme.*
@@ -47,10 +52,20 @@ fun ClipLibraryScreen(
     val str = remember(settings.language) { VisorStrings.get(settings.language) }
 
     var showLockedOnly by remember { mutableStateOf(false) }
+    var selectedBlackboxReport by remember { mutableStateOf<BlackboxReport?>(null) }
     val clipsFlow = remember(showLockedOnly) {
         if (showLockedOnly) clipDao.getLockedClipsFlow() else clipDao.getAllClipsFlow()
     }
     val clips by clipsFlow.collectAsState(initial = emptyList())
+
+    selectedBlackboxReport?.let { report ->
+        BlackboxReportDialog(
+            report = report,
+            language = settings.language,
+            str = str,
+            onDismiss = { selectedBlackboxReport = null }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -125,8 +140,13 @@ fun ClipLibraryScreen(
                             coroutineScope.launch(Dispatchers.IO) {
                                 val file = File(clip.filePath)
                                 if (file.exists()) file.delete()
+                                val jsonFile = File(file.parentFile, "${file.nameWithoutExtension}_blackbox.json")
+                                if (jsonFile.exists()) jsonFile.delete()
                                 clipDao.delete(clip)
                             }
+                        },
+                        onShowBlackbox = { report ->
+                            selectedBlackboxReport = report
                         }
                     )
                 }
@@ -142,10 +162,15 @@ fun ClipItemCard(
     str: VisorI18nStrings,
     onPlayClicked: () -> Unit,
     onToggleLock: () -> Unit,
-    onDeleteClicked: () -> Unit
+    onDeleteClicked: () -> Unit,
+    onShowBlackbox: (BlackboxReport) -> Unit
 ) {
     val dateStr = SimpleDateFormat("yyyy/MM/dd HH:mm:ss", Locale.getDefault())
         .format(Date(clip.startTimeMillis))
+
+    val blackboxReport = remember(clip.filePath) {
+        BlackboxRecorder.loadReportForVideo(File(clip.filePath))
+    }
 
     Card(
         shape = RoundedCornerShape(12.dp),
@@ -222,6 +247,20 @@ fun ClipItemCard(
                             fontSize = 11.sp
                         )
                     }
+                    if (blackboxReport != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedButton(
+                            onClick = { onShowBlackbox(blackboxReport) },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = AccentCyan),
+                            border = BorderStroke(1.dp, AccentCyan.copy(alpha = 0.6f)),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.QueryStats, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(str.blackboxAnalysisButton, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
 
                 Row {
@@ -264,5 +303,213 @@ private fun playVideo(context: Context, filePath: String) {
         context.startActivity(intent)
     } catch (e: Exception) {
         e.printStackTrace()
+    }
+}
+
+@Composable
+fun BlackboxReportDialog(
+    report: BlackboxReport,
+    language: AppLanguage,
+    str: VisorI18nStrings,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Shield, contentDescription = null, tint = AccentCyan, modifier = Modifier.size(24.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(str.blackboxReportTitle, color = TextWhite, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = "${report.videoFileName} | ${report.eventType}",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+
+                // Scenario Banner Card
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = DarkSurface),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Text(
+                            text = str.blackboxScenarioTitle,
+                            color = WarningAmber,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (language == AppLanguage.EN) report.scenarioEn else report.scenarioZh,
+                            color = TextWhite,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Key Speed & Impact Grid
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetricBox(
+                        title = str.blackboxEgoSpeed,
+                        value = "${report.egoSpeedAtImpactKmh.toInt()} km/h",
+                        color = AccentCyan,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricBox(
+                        title = str.blackboxTargetSpeed,
+                        value = report.targetSpeedAtImpactKmh?.let { "${it.toInt()} km/h" } ?: "N/A",
+                        color = if (report.targetSpeedAtImpactKmh != null) WarningAmber else TextMuted,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    MetricBox(
+                        title = str.blackboxRelativeSpeed,
+                        value = report.relativeSpeedAtImpactKmh?.let { "${if (it > 0) "+" else ""}${it.toInt()} km/h" } ?: "N/A",
+                        color = AlertRed,
+                        modifier = Modifier.weight(1f)
+                    )
+                    MetricBox(
+                        title = str.blackboxImpactG,
+                        value = "${String.format(Locale.US, "%.2f", report.impactGForce)}G",
+                        color = if (report.impactGForce > 2.0f) AlertRed else SafeGreen,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                // Timeline Section
+                Text(
+                    text = str.blackboxTimelineTitle,
+                    color = AccentCyan,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                // Timeline Table Header
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(DarkSurface, RoundedCornerShape(4.dp))
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("時間", color = TextMuted, fontSize = 11.sp, modifier = Modifier.width(44.dp))
+                    Text("自車時速", color = TextMuted, fontSize = 11.sp, modifier = Modifier.width(56.dp))
+                    Text("對方時速", color = TextMuted, fontSize = 11.sp, modifier = Modifier.width(56.dp))
+                    Text("距離", color = TextMuted, fontSize = 11.sp, modifier = Modifier.width(42.dp))
+                    Text("重力", color = TextMuted, fontSize = 11.sp)
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                for (item in report.timeline) {
+                    val isImpactPoint = item.timeOffsetSec == 0.0f
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isImpactPoint) AlertRed.copy(alpha = 0.2f) else CardBackground,
+                                RoundedCornerShape(4.dp)
+                            )
+                            .padding(horizontal = 6.dp, vertical = 3.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = String.format(Locale.US, "T%+.1fs", item.timeOffsetSec),
+                            color = if (isImpactPoint) AlertRed else TextWhite,
+                            fontSize = 11.sp,
+                            fontWeight = if (isImpactPoint) FontWeight.Bold else FontWeight.Normal,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.width(44.dp)
+                        )
+                        Text(
+                            text = "${item.egoSpeedKmh.toInt()} km/h",
+                            color = AccentCyan,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.width(56.dp)
+                        )
+                        Text(
+                            text = item.targetSpeedKmh?.let { "${it.toInt()} km/h" } ?: "-",
+                            color = WarningAmber,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.width(56.dp)
+                        )
+                        Text(
+                            text = item.distanceMeters?.let { String.format(Locale.US, "%.1fm", it) } ?: "-",
+                            color = TextWhite,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.width(42.dp)
+                        )
+                        Text(
+                            text = String.format(Locale.US, "%.2fG", item.gForceTotal),
+                            color = if (item.gForceTotal > 1.8f) AlertRed else TextMuted,
+                            fontSize = 11.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+            ) {
+                Text(str.confirm, color = PureBlack, fontWeight = FontWeight.Bold)
+            }
+        },
+        containerColor = CardBackground,
+        shape = RoundedCornerShape(14.dp)
+    )
+}
+
+@Composable
+private fun MetricBox(
+    title: String,
+    value: String,
+    color: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        shape = RoundedCornerShape(8.dp),
+        modifier = modifier
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            Text(text = title, color = TextMuted, fontSize = 10.sp)
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = value,
+                color = color,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+        }
     }
 }
