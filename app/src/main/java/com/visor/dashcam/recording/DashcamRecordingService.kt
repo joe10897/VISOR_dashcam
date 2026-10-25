@@ -48,8 +48,14 @@ import com.visor.dashcam.data.repository.SettingsRepository
 import com.visor.dashcam.data.repository.VideoQualityOption
 import com.visor.dashcam.sensors.TelemetryManager
 import com.visor.dashcam.sensors.ThermalManager
+import android.hardware.SensorManager
+import android.view.OrientationEventListener
+import android.view.Surface
+import android.view.WindowManager
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -109,6 +115,14 @@ class DashcamRecordingService : LifecycleService() {
     private val isStartingSegment = AtomicBoolean(false)
     private var isCameraBound = false
 
+    private var currentRotation: Int = Surface.ROTATION_90
+    private var orientationEventListener: OrientationEventListener? = null
+
+    // Non-cancellable coroutine scope for critical database operations (never cancelled by service destroy)
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var shutdownCallback: (() -> Unit)? = null
+    private val isShuttingDown = AtomicBoolean(false)
+
     private var lastInferenceTimestamp = 0L
 
     inner class LocalBinder : Binder() {
@@ -141,6 +155,8 @@ class DashcamRecordingService : LifecycleService() {
         overlayThread = oThread
         overlayHandler = Handler(oThread.looper)
 
+        initOrientationListener()
+
         // Warm up YOLO detector on background thread so Main Thread is never blocked
         analysisExecutor.execute {
             val useNnapi = settingsRepository.settings.value.useNnapiAcceleration
@@ -160,6 +176,65 @@ class DashcamRecordingService : LifecycleService() {
             }
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    private fun initOrientationListener() {
+        val dm = getSystemService(DISPLAY_SERVICE) as? android.hardware.display.DisplayManager
+        val initialRotation = dm?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.rotation ?: Surface.ROTATION_90
+        currentRotation = initialRotation
+
+        val oListener = object : OrientationEventListener(this, SensorManager.SENSOR_DELAY_NORMAL) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                // Map physical sensor orientation to surface rotation
+                val newRotation = when (orientation) {
+                    in 45 until 135 -> Surface.ROTATION_270
+                    in 135 until 225 -> Surface.ROTATION_180
+                    in 225 until 315 -> Surface.ROTATION_90
+                    else -> Surface.ROTATION_0
+                }
+                if (newRotation != currentRotation) {
+                    updateTargetRotation(newRotation)
+                }
+            }
+        }
+        if (oListener.canDetectOrientation()) {
+            oListener.enable()
+        }
+        orientationEventListener = oListener
+    }
+
+    /**
+     * Dynamically updates CameraX use cases' target rotation when phone is rotated (e.g. inverted 180° in car mount).
+     */
+    fun updateTargetRotation(rotation: Int) {
+        if (currentRotation == rotation) return
+        currentRotation = rotation
+
+        ContextCompat.getMainExecutor(this).execute {
+            try {
+                previewUseCase?.targetRotation = rotation
+                imageAnalysis?.targetRotation = rotation
+                videoCapture?.targetRotation = rotation
+
+                // When rotation flips (e.g. 180° upside-down mount adjustment) while actively recording,
+                // seamlessly cycle the segment if it has recorded for >= 2 seconds
+                // so the video file's container metadata matches the new orientation immediately!
+                val recording = activeRecording
+                val elapsed = if (currentSegmentStartTime > 0L) {
+                    ((System.currentTimeMillis() - currentSegmentStartTime) / 1000L).toInt()
+                } else 0
+                if (recording != null && elapsed >= 2 && shouldKeepRecording.get()) {
+                    try {
+                        recording.stop()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 
@@ -326,9 +401,11 @@ class DashcamRecordingService : LifecycleService() {
         val currentSettings = settingsRepository.settings.value
 
         // 1. Preview UseCase (Owned by Service so UI navigation never interrupts recording)
-        val preview = Preview.Builder().build().also {
-            it.setSurfaceProvider(pendingSurfaceProvider)
-        }
+        val preview = Preview.Builder()
+            .setTargetRotation(currentRotation)
+            .build().also {
+                it.setSurfaceProvider(pendingSurfaceProvider)
+            }
         previewUseCase = preview
 
         // 2. VideoCapture UseCase
@@ -344,7 +421,9 @@ class DashcamRecordingService : LifecycleService() {
             .setQualitySelector(qualitySelector)
             .setExecutor(recordingExecutor)
             .build()
-        val videoCap = VideoCapture.withOutput(recorder)
+        val videoCap = VideoCapture.Builder(recorder)
+            .setTargetRotation(currentRotation)
+            .build()
         videoCapture = videoCap
 
         // 3. ImageAnalysis UseCase for Offline YOLO AI Inference
@@ -352,6 +431,7 @@ class DashcamRecordingService : LifecycleService() {
             .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
             .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
             .setTargetResolution(android.util.Size(640, 360))
+            .setTargetRotation(currentRotation)
             .build()
 
         analysis.setAnalyzer(analysisExecutor) { imageProxy ->
@@ -538,7 +618,16 @@ class DashcamRecordingService : LifecycleService() {
 
         var bitmap: android.graphics.Bitmap? = null
         try {
-            bitmap = imageProxy.toBitmap()
+            val rotationDegrees = imageProxy.imageInfo.rotationDegrees
+            val rawBitmap = imageProxy.toBitmap()
+            bitmap = if (rotationDegrees != 0) {
+                val matrix = android.graphics.Matrix().apply { postRotate(rotationDegrees.toFloat()) }
+                android.graphics.Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true).also {
+                    rawBitmap.recycle()
+                }
+            } else {
+                rawBitmap
+            }
             val detections = yoloDetector.detect(
                 bitmap = bitmap,
                 confidenceThreshold = currentSettings.aiConfidenceThreshold,
@@ -640,9 +729,10 @@ class DashcamRecordingService : LifecycleService() {
         val telemetry = telemetryManager.telemetry.value
         val maxSpeed = maxOf(segmentMaxSpeedKmh, telemetry.speedKmh)
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        // Non-cancellable serviceScope ensures Room DB insert finishes even if service is stopping
+        serviceScope.launch {
             try {
-                if (file.exists() && file.length() > 0L) {
+                if (file.exists() && file.length() > 1024L) {
                     storageManager.saveClipRecord(
                         file = file,
                         startTime = startTime,
@@ -666,6 +756,28 @@ class DashcamRecordingService : LifecycleService() {
             // Seamlessly kick off the next segment if continuous loop recording is still active
             if (shouldKeepRecording.get()) {
                 startNextVideoSegment()
+            } else if (isShuttingDown.get()) {
+                withContext(Dispatchers.Main) {
+                    doCleanupAndStop()
+                }
+            }
+        }
+    }
+
+    /**
+     * Cuts and finalizes the active recording segment immediately (e.g. when user opens Clip Library),
+     * ensuring the recorded footage is saved into the database and immediately visible and playable.
+     */
+    fun cutCurrentSegmentNow() {
+        val recording = activeRecording
+        val elapsed = if (currentSegmentStartTime > 0L) {
+            ((System.currentTimeMillis() - currentSegmentStartTime) / 1000L).toInt()
+        } else 0
+        if (recording != null && elapsed >= 3 && shouldKeepRecording.get()) {
+            try {
+                recording.stop()
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
     }
@@ -715,13 +827,42 @@ class DashcamRecordingService : LifecycleService() {
         )
     }
 
-    fun stopDashcam() {
+    /**
+     * Gracefully stops the dashcam by waiting for the active recording to drain,
+     * finalize its MP4 headers (moov box), and persist the clip record into Room DB.
+     */
+    fun stopDashcam(onComplete: (() -> Unit)? = null) {
+        if (isShuttingDown.getAndSet(true)) {
+            onComplete?.invoke()
+            return
+        }
+        shutdownCallback = onComplete
         shouldKeepRecording.set(false)
         timerJob?.cancel()
-        try {
-            activeRecording?.stop()
-        } catch (_: Exception) {
+
+        val recording = activeRecording
+        if (recording != null) {
+            try {
+                // Request recording stop. VideoRecordEvent.Finalize will fire when muxer completes
+                recording.stop()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                doCleanupAndStop()
+            }
+
+            // Watchdog fallback: force finalize if Finalize doesn't fire within 3.5s
+            serviceScope.launch(Dispatchers.Main) {
+                delay(3500L)
+                if (isShuttingDown.get()) {
+                    doCleanupAndStop()
+                }
+            }
+        } else {
+            doCleanupAndStop()
         }
+    }
+
+    private fun doCleanupAndStop() {
         activeRecording = null
         try {
             overlayEffect?.close()
@@ -729,17 +870,22 @@ class DashcamRecordingService : LifecycleService() {
         overlayEffect = null
         try {
             cameraProvider?.unbindAll()
-        } catch (_: Exception) {
-        }
+        } catch (_: Exception) {}
         isCameraBound = false
         _recordingState.value = _recordingState.value.copy(isRecording = false)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
+
+        val callback = shutdownCallback
+        shutdownCallback = null
+        callback?.invoke()
     }
 
     override fun onDestroy() {
         shouldKeepRecording.set(false)
         timerJob?.cancel()
+        orientationEventListener?.disable()
+        orientationEventListener = null
         try {
             overlayEffect?.close()
         } catch (_: Exception) {}

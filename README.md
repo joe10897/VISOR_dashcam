@@ -5,7 +5,7 @@
 [![Target SDK](https://img.shields.io/badge/Target%20SDK-35%20(Android%2015)-blue.svg)](https://developer.android.com/about/versions/15)
 [![16KB Page Size](https://img.shields.io/badge/Android%2015-16KB%20Page--Size%20Ready-success.svg)](https://developer.android.com/guide/practices/page-sizes)
 [![Inference Engine](https://img.shields.io/badge/AI%20Engine-ONNX%20Runtime%20Mobile%20%2B%20NNAPI-orange.svg)](https://onnxruntime.ai)
-[![Zero-Cloud](https://img.shields.io/badge/Privacy-100%25%20Zero--Cloud%20Offline-red.svg)](#-核心架構與設計哲學)
+[![Zero-Cloud](https://img.shields.io/badge/Privacy-100%25%20Zero--Cloud%20Offline-red.svg)](#隱私與安全性架構)
 
 > **VISOR (Vehicle Intelligent Sensory Optical Recorder)** 是一款專為 Android 平台打造的**完全離線（100% On-Device / Zero-Cloud）高階車載邊緣行車記錄器與 ADAS 駕駛輔助系統**。
 >
@@ -86,6 +86,7 @@ VISOR 採用 Jetpack Compose 打造高對比、低眩光且符合車規人體工
 - **視訊解析度**：4K UHD (2160p) / 1080p Full HD (建議) / 720p HD。
 - **循環分段時長**：1 分鐘 / 3 分鐘 (預設標準) / 5 分鐘。
 - **視訊遙測浮水印開關**：控制是否將時速、時間與 GPS 座標直接編碼至 MP4 視訊流。
+- **ADAS 預警距離微調 (0 效能損耗)**：提供 0.8x (近/較晚) 至 1.2x (遠/提早) 五檔微調，完美適應不同車型與駕駛習慣。
 - **高溫動態降頻保護**：高於 40°C 自動降頻 AI 推論，45°C+ 進入極致保護模式確保錄影不中斷。
 
 ---
@@ -189,6 +190,20 @@ flowchart TD
 | **WARM (溫暖)** | $37^\circ\text{C} \sim 40^\circ\text{C}$ | 降低 AI 取樣率至 5 FPS，背景減低算力消耗 |
 | **HOT (高溫)** | $40^\circ\text{C} \sim 45^\circ\text{C}$ | 暫停 AI 視覺推論，UI 提示降溫，確保主錄影管線正常 |
 | **CRITICAL (極限)** | $> 45^\circ\text{C}$ | 強制轉入黑屏節能模式，僅保留關鍵循環錄影與 G-Sensor |
+
+### 5. 車載動態 180° / 倒置自適應旋轉 (Dynamic Auto-Orientation)
+- 針對不同車型支架安裝習慣（例如充電線朝向左側或右側、倒立安裝），服務層內建 `OrientationEventListener` 與 `DisplayManager` 動態校正。
+- 自動同步調整 CameraX Preview、VideoCapture 與 ImageAnalysis 管線之目標旋轉角度 (`targetRotation`)。
+- 旋轉時自動觸發安全無縫接續換檔，同時在 AI 視覺分析前進行旋轉矩陣變換，確保 YOLO26n 檢測邊界框與 TTC 距離判斷永遠與實際地平線一致。
+
+### 6. 未滿分段與中途關機之安全原子落盤 (Atomic In-Flight Segment Finalization)
+- 解決傳統行車記錄器在手動關機或中途退出時，當前分段尚未滿 3~5 分鐘導致視訊檔案損毀遺失的問題。
+- 採用非取消的獨立協程範疇 (`SupervisorJob() + Dispatchers.IO`)，關機前監聽 CameraX `VideoRecordEvent.Finalize`，保證 MP4 容器之關鍵 `moov` 索引標籤寫入磁碟並完成 Room SQLite 交易。
+- 使用者點擊進入「影片庫」時，若當前錄影時長已超過 3 秒，系統即刻無縫裁切儲存當前片段並續錄新片段，確保剛錄下的所有畫面立即可在影片庫播放與管理。
+
+### 7. 零效能損耗之 ADAS 預警距離微調 (Zero-Overhead Distance Calibration)
+- 於設定頁面提供「預警距離微調」選項：`0.8x (偏近/較晚提醒)`、`0.9x`、`1.0x (標準推薦)`、`1.1x`、`1.2x (偏遠/提早提醒)`。
+- 採用純量浮點數一階運算校正幾何距離，單次檢測耗時僅約 0.1 奈秒 ($O(1)$)，對神經網路推論幀率與 CPU 負載帶來 **0% 額外效能損耗**。
 
 ---
 

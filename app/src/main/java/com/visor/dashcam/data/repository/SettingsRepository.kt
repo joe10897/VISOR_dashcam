@@ -49,6 +49,7 @@ data class DashcamSettings(
     val aiEnabled: Boolean = true,                  // AI 辨識總開關
     val fcwEnabled: Boolean = true,                 // 前車防撞預警 (FCW)
     val fcwSensitivity: FcwSensitivity = FcwSensitivity.STANDARD,
+    val distanceCalibrationFactor: Float = 1.0f,    // 預警距離微調係數: 0.8x ~ 1.2x (純量乘法，零效能損耗)
     val lvdaEnabled: Boolean = true,                // 前車起步提醒 (LVDA)
     val hmwEnabled: Boolean = true,                 // 車距過近提示 (HMW)
     val alertSoundEnabled: Boolean = true,          // 警示蜂鳴音開關
@@ -88,6 +89,7 @@ class SettingsRepository(context: Context) {
             aiEnabled = prefs.getBoolean("ai_enabled", true),
             fcwEnabled = prefs.getBoolean("fcw_enabled", true),
             fcwSensitivity = runCatching { FcwSensitivity.valueOf(fcwSensName!!) }.getOrDefault(FcwSensitivity.STANDARD),
+            distanceCalibrationFactor = prefs.getFloat("distance_calibration_factor", 1.0f),
             lvdaEnabled = prefs.getBoolean("lvda_enabled", true),
             hmwEnabled = prefs.getBoolean("hmw_enabled", true),
             alertSoundEnabled = prefs.getBoolean("alert_sound_enabled", true),
@@ -114,6 +116,7 @@ class SettingsRepository(context: Context) {
             putBoolean("ai_enabled", updated.aiEnabled)
             putBoolean("fcw_enabled", updated.fcwEnabled)
             putString("fcw_sensitivity", updated.fcwSensitivity.name)
+            putFloat("distance_calibration_factor", updated.distanceCalibrationFactor)
             putBoolean("lvda_enabled", updated.lvdaEnabled)
             putBoolean("hmw_enabled", updated.hmwEnabled)
             putBoolean("alert_sound_enabled", updated.alertSoundEnabled)

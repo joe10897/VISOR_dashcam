@@ -66,12 +66,14 @@ class ADASManager(
             val bottomY = det.boundingBox.bottom
             val bboxWidth = det.boundingBox.width()
 
+            val calibFactor = settings.distanceCalibrationFactor.coerceIn(0.5f, 2.0f)
             if (bottomY > horizonNormalizedY + 0.05f) {
                 val distFromWidth = (1.1f * 1.8f) / max(bboxWidth, 0.05f)
                 val distFromPerspective = mountHeight / max((bottomY - horizonNormalizedY), 0.02f)
-                det.distanceMeters = (0.6f * distFromWidth + 0.4f * distFromPerspective).coerceIn(1.5f, 120f)
+                val rawDist = (0.6f * distFromWidth + 0.4f * distFromPerspective).coerceIn(1.5f, 120f)
+                det.distanceMeters = (rawDist * calibFactor).coerceIn(1.0f, 120f)
             } else {
-                det.distanceMeters = 80f
+                det.distanceMeters = (80f * calibFactor).coerceIn(1.0f, 120f)
             }
 
             // Ego Lane Detection Corridor: center of screen [0.32, 0.68]

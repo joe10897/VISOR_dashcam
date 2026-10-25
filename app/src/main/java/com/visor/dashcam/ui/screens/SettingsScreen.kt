@@ -425,6 +425,33 @@ fun SettingsScreen(
                                     )
                                 }
                             }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(str.distanceCalibrationTitle, color = TextWhite, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(str.distanceCalibrationSub, color = TextMuted, fontSize = 11.sp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            val distanceFactors = listOf(
+                                0.80f to if (settings.language == AppLanguage.EN) "0.8x (Close)" else "0.8x (近/較晚)",
+                                0.90f to "0.9x",
+                                1.00f to if (settings.language == AppLanguage.EN) "1.0x (Standard)" else "1.0x (標準推薦)",
+                                1.10f to "1.1x",
+                                1.20f to if (settings.language == AppLanguage.EN) "1.2x (Far)" else "1.2x (遠/提早)"
+                            )
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                distanceFactors.forEach { (factor, label) ->
+                                    FilterChip(
+                                        selected = kotlin.math.abs(settings.distanceCalibrationFactor - factor) < 0.03f,
+                                        onClick = {
+                                            settingsRepository.updateSettings { it.copy(distanceCalibrationFactor = factor) }
+                                        },
+                                        label = { Text(label) },
+                                        colors = FilterChipDefaults.filterChipColors(
+                                            selectedContainerColor = AccentCyan,
+                                            selectedLabelColor = PureBlack
+                                        )
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))

@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -22,7 +23,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -34,6 +37,7 @@ import com.visor.dashcam.recording.RecordingState
 import com.visor.dashcam.sensors.TelemetryData
 import com.visor.dashcam.sensors.ThermalState
 import com.visor.dashcam.ui.components.VisorHUD
+import com.visor.dashcam.ui.i18n.VisorStrings
 import com.visor.dashcam.ui.screens.ClipLibraryScreen
 import com.visor.dashcam.ui.screens.SettingsScreen
 import com.visor.dashcam.ui.theme.PureBlack
@@ -49,14 +53,34 @@ class MainActivity : ComponentActivity() {
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as? DashcamRecordingService.LocalBinder
-            recordingService = localBinder?.getService()
+            val svc = localBinder?.getService()
+            recordingService = svc
             isBound = true
+
+            val displayRotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                display?.rotation ?: Surface.ROTATION_90
+            } else {
+                @Suppress("DEPRECATION")
+                windowManager.defaultDisplay.rotation
+            }
+            svc?.updateTargetRotation(displayRotation)
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
             recordingService = null
             isBound = false
         }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        val displayRotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            display?.rotation ?: Surface.ROTATION_90
+        } else {
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.rotation
+        }
+        recordingService?.updateTargetRotation(displayRotation)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -87,6 +111,8 @@ class MainActivity : ComponentActivity() {
 
         var hasCameraPermission by remember { mutableStateOf(hasCameraPermissionGranted()) }
         var currentScreen by remember { mutableStateOf("HUD") } // "HUD", "LIBRARY", "SETTINGS"
+        var isShuttingDownApp by remember { mutableStateOf(false) }
+        val str = remember(settings.language) { VisorStrings.get(settings.language) }
 
         BackHandler(enabled = currentScreen != "HUD") {
             currentScreen = "HUD"
@@ -157,13 +183,26 @@ class MainActivity : ComponentActivity() {
                             service?.lockCurrentRecording("MANUAL_TOUCH_LOCK")
                         },
                         onStopClicked = {
-                            try {
-                                service?.stopDashcam()
-                            } catch (_: Exception) {}
-                            stopRecordingService()
-                            finishAffinity()
+                            isShuttingDownApp = true
+                            val svc = service
+                            if (svc != null) {
+                                svc.stopDashcam {
+                                    runOnUiThread {
+                                        try {
+                                            if (isBound) {
+                                                unbindService(serviceConnection)
+                                                isBound = false
+                                            }
+                                        } catch (_: Exception) {}
+                                        finishAffinity()
+                                    }
+                                }
+                            } else {
+                                finishAffinity()
+                            }
                         },
                         onLibraryClicked = {
+                            service?.cutCurrentSegmentNow()
                             currentScreen = "LIBRARY"
                         },
                         onSettingsClicked = {
@@ -196,6 +235,29 @@ class MainActivity : ComponentActivity() {
                             currentScreen = "HUD"
                         }
                     )
+                }
+            }
+
+            if (isShuttingDownApp) {
+                androidx.compose.ui.window.Dialog(onDismissRequest = {}) {
+                    Card(
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color(0xFF1E1E24))
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            CircularProgressIndicator(color = com.visor.dashcam.ui.theme.AlertRed)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = str.shutdownSavingMsg,
+                                color = TextWhite,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
                 }
             }
         }
