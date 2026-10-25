@@ -1,5 +1,9 @@
 # 🛡️ VISOR AI Dashcam (車載智慧邊緣行車記錄器)
 
+<p align="center">
+  <img src="docs/app_logo.png" alt="VISOR App Logo" width="160" />
+</p>
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Android](https://img.shields.io/badge/Platform-Android%2010%2B%20(API%2029%2B)-green.svg)](https://developer.android.com)
 [![Target SDK](https://img.shields.io/badge/Target%20SDK-35%20(Android%2015)-blue.svg)](https://developer.android.com/about/versions/15)
@@ -325,7 +329,7 @@ cd VISOR_dashcam
 ./gradlew assembleDebug
 
 # 安裝至連線之 Android 手機或模擬器
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/VISOR_Dashcam.apk
 ```
 
 ### 3. 模型自定義與重新導出 (選用)

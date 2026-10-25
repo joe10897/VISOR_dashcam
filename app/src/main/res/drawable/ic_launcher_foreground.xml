@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer Security Shield -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.5"
+        android:strokeLineJoin="round"
+        android:fillColor="#10192E"
+        android:pathData="M54,23 L79,32 L75,63 L54,83 L33,63 L29,32 Z" />
+
+    <!-- Inner Shield Accent Line -->
+    <path
+        android:strokeColor="#FFB300"
+        android:strokeAlpha="0.75"
+        android:strokeWidth="1.2"
+        android:strokeLineJoin="round"
+        android:pathData="M54,28 L74,35 L71,60 L54,77 L37,60 L34,35 Z" />
+
+    <!-- Camera Outer Bevel Ring -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:fillColor="#0A1124"
+        android:pathData="M54,53m-16,0a16,16 0,1,1 32,0a16,16 0,1,1 -32,0" />
+
+    <!-- Lens Optical Aperture Glass -->
+    <path
+        android:strokeColor="#FFB300"
+        android:strokeWidth="1.5"
+        android:fillColor="#005B66"
+        android:pathData="M54,53m-11,0a11,11 0,1,1 22,0a11,11 0,1,1 -22,0" />
+
+    <!-- Pupil Center -->
+    <path
+        android:fillColor="#050811"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="1"
+        android:pathData="M54,53m-5,0a5,5 0,1,1 10,0a5,5 0,1,1 -10,0" />
+
+    <!-- Glare Reflection -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.8"
+        android:pathData="M51,50m-2,0a2,2 0,1,1 4,0a2,2 0,1,1 -4,0" />
+
+    <!-- Glowing Red REC Dot -->
+    <path
+        android:fillColor="#FF2A2A"
+        android:strokeColor="#FFAAAA"
+        android:strokeWidth="0.6"
+        android:pathData="M66,37m-2.6,0a2.6,2.6 0,1,1 5.2,0a2.6,2.6 0,1,1 -5.2,0" />
+
+    <!-- AI Bounding Box Reticle Brackets -->
+    <!-- Top-Left -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:pathData="M43,45 L43,41 L47,41" />
+
+    <!-- Top-Right -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:pathData="M61,41 L65,41 L65,45" />
+
+    <!-- Bottom-Left -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:pathData="M43,61 L43,65 L47,65" />
+
+    <!-- Bottom-Right -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:pathData="M61,65 L65,65 L65,61" />
+</vector>
